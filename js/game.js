@@ -8,17 +8,20 @@ const TUNING = {
   boostTime: 1.7,
 };
 
-// Radius comes from steer angle and wheelbase. The friction circle caps
-// cornering, so extra steering past the limit pushes the car wide.
-const VEHICLE = {
-  wheelbase: 2.55,
-  mu: 16.5,
-  accel: 17,
-  brake: 28,
-  drag: 0.0072,
-  rollDrag: 0.18,
-  maxSteer: 0.46,
-  grade: 8.5,
+// Drifting Tofu's Hot Slide model. The stick points the nose. The nose
+// chases that aim like a damped spring. The path is a sled that bends
+// toward the nose, and a big swing is what brakes the car.
+const SLIDE = {
+  top: 150 / 3.6,
+  earlyAcc: 30 / 3.6,
+  midAcc: 26 / 3.6,
+  handling: 9.2,
+  yawDamping: 1.02,
+  grip: 50,
+  driftHold: 1.35,
+  slideMomentum: 0.3,
+  driftLoss: 0.42,
+  brake: 16,
 };
 
 const CAM = {
@@ -141,7 +144,7 @@ export function buildTrack() {
   const brakeR = new Float64Array(N);
   for (let i = 0; i < N; i++) {
     let r = samples[i].radius;
-    for (let k = 1; k <= 16; k++) r = Math.min(r, samples[(i + k) % N].radius + k * 2.8);
+    for (let k = 1; k <= 28; k++) r = Math.min(r, samples[(i + k) % N].radius + k * 1.55);
     brakeR[i] = r;
   }
   for (let i = 0; i < N; i++) samples[i].brakeRadius = brakeR[i];
@@ -186,9 +189,18 @@ let tiltWanted = false;
 let tiltOn = false;
 let tiltSteer = 0;
 let brakeHeld = false;
-let stickX = 0;
-let stickY = 0;
 let stickId = null;
+let stickActive = false;
+let stickOx = 0;
+let stickOy = 0;
+let stickHomeX = 0;
+let stickHomeY = 0;
+const STICK_R = 56;
+const STICK_DEAD = 14;
+const STICK_OUTER = 90;
+const _look = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _upY = new THREE.Vector3(0, 1, 0);
 let mapCache = null;
 let puffMesh = null;
 let puffs = [];
@@ -550,9 +562,9 @@ function followCamera(dt) {
     ahead.z * (1 - mix) + player.z * mix
   );
   desiredPos.set(
-    player.x - f.tx * CAM.back + f.rx * steerSmooth * 1.6,
+    player.x - f.tx * CAM.back + f.rx * clamp(player.slip || 0, -0.7, 0.7) * 3,
     player.surfaceY + CAM.height,
-    player.z - f.tz * CAM.back + f.rz * steerSmooth * 1.6
+    player.z - f.tz * CAM.back + f.rz * clamp(player.slip || 0, -0.7, 0.7) * 3
   );
   const k = 1 - Math.exp(-CAM.lambda * dt);
   camPos.lerp(desiredPos, k);
@@ -1464,6 +1476,10 @@ function placeCars() {
     car.cmdSteer = 0;
     car.lapStamp = 0;
     car.yaw = Math.atan2(f.tx, f.tz);
+    car.target = car.yaw;
+    car.slide = 0;
+    car.slip = 0;
+    car.travel = car.yaw;
     car.x = f.x + f.rx * car.baseLane;
     car.z = f.z + f.rz * car.baseLane;
     car.surfaceY = f.y + Math.sin(f.bank) * car.baseLane + 0.08;
@@ -1517,7 +1533,7 @@ function launch() {
   showCount('GO');
   goLeft = 0.55;
   hintLeft = 3.2;
-  hintEl.textContent = 'DRAG THE STICK TO STEER';
+  hintEl.textContent = 'POINT THE STICK TO DRIFT';
   hintEl.classList.add('show');
   beep(880, 0.22, 'square', 0.06);
   buzz(18);
@@ -1527,17 +1543,12 @@ function stepRace(dt) {
   if (hitCd > 0) hitCd -= dt;
   if (scrapeLeft > 0) scrapeLeft -= dt;
   raceTime += dt;
-  steerSmooth = damp(steerSmooth, readSteer(), 14, dt);
-  const brakeAmt = readBrakeAmount();
-  stepVehicle(player, {
-    steer: steerSmooth,
-    throttle: brakeAmt > 0.08 ? 0 : 1,
-    brake: brakeAmt,
-    grade: gradeAt(player),
-  }, dt);
+  aimPlayer();
+  slideStep(player, dt);
   for (const car of cars) {
     if (!car.ai) continue;
-    stepVehicle(car, driveAI(car, dt), dt);
+    driveAI(car, dt);
+    slideStep(car, dt);
   }
   collideAll();
   for (const car of cars) resolveWalls(car, dt);
@@ -1588,7 +1599,6 @@ function stepRace(dt) {
   if (player.boost > 0 && Math.random() < 0.35) {
     spawnPuff(player.x, player.surfaceY + 0.3, player.z, 0x8fffe4, 0.55, 0.28, (Math.random() - 0.5) * 2, 0.8, (Math.random() - 0.5) * 2);
   }
-  player.braking = readBrakeAmount() > 0.2;
 }
 
 function gradeAt(car) {
@@ -1597,68 +1607,72 @@ function gradeAt(car) {
   return (ahead.y - here.y) / Math.max(1, trackLength * 0.012);
 }
 
-export function stepVehicle(car, ctrl, dt) {
+function wrapAng(a) {
+  a = (a + Math.PI) % (Math.PI * 2);
+  if (a < 0) a += Math.PI * 2;
+  return a - Math.PI;
+}
+
+export function slideStep(car, dt) {
   const steps = dt > 0.02 ? 2 : 1;
   const h = dt / steps;
-  for (let i = 0; i < steps; i++) integrateVehicle(car, ctrl, h);
+  for (let i = 0; i < steps; i++) slideIntegrate(car, h);
   if (car.boost > 0) car.boost = Math.max(0, car.boost - dt);
 }
 
-function integrateVehicle(car, ctrl, dt) {
-  const steer = clamp(ctrl.steer || 0, -1, 1);
-  const throttle = clamp(ctrl.throttle || 0, 0, 1);
-  const brake = clamp(ctrl.brake || 0, 0, 1);
-  // Positive steer is a left turn. In this frame, increasing yaw rotates toward +right.
-  const delta = -steer * VEHICLE.maxSteer;
-  const fwdX = Math.sin(car.yaw);
-  const fwdZ = Math.cos(car.yaw);
-  const rightX = Math.cos(car.yaw);
-  const rightZ = -Math.sin(car.yaw);
-  let longS = car.vx * fwdX + car.vz * fwdZ;
-  let latS = car.vx * rightX + car.vz * rightZ;
-
-  let drive = throttle * VEHICLE.accel * (car.boost > 0 ? 1.38 : 1);
-  drive -= brake * VEHICLE.brake;
-  drive -= Math.sign(longS) * VEHICLE.drag * longS * longS;
-  drive -= longS * VEHICLE.rollDrag;
-  drive -= (ctrl.grade || 0) * VEHICLE.grade;
-
-  // One grip budget: acceleration and cornering cannot both be maxed.
-  const longUse = clamp(drive / VEHICLE.mu, -1, 1);
-  const latMax = VEHICLE.mu * Math.sqrt(Math.max(0, 1 - longUse * longUse));
-  const yawDemand = (longS / VEHICLE.wheelbase) * Math.tan(delta);
-  const latDemand = Math.abs(yawDemand * longS);
-  const asking = Math.abs(delta) > 0.02 && Math.abs(longS) > 2;
-  const grip = asking ? latMax / Math.max(latDemand, 0.25) : 1;
-  const yawTarget = grip >= 1 ? yawDemand : yawDemand * grip;
-  car.yawRate = damp(car.yawRate || 0, yawTarget, 7, dt);
+function slideIntegrate(car, dt) {
+  const spd0 = Math.hypot(car.vx, car.vz);
+  let trav = spd0 > 0.3 ? Math.atan2(car.vx, car.vz) : car.yaw;
+  const err = wrapAng((car.target ?? car.yaw) - car.yaw);
+  const wn = SLIDE.handling;
+  const authority = clamp(0.3 + spd0 / (15 / 3.6), 0.3, 1);
+  car.yawRate += (wn * wn * authority * err - 2 * SLIDE.yawDamping * wn * car.yawRate) * dt;
   car.yaw += car.yawRate * dt;
-  longS += drive * dt;
-  // Tires pull the slide back. Past the limit they cannot, so the car pushes wide.
-  const align = grip >= 1 ? 9 : 1.6 + grip * 3;
-  latS = damp(latS, 0, align, dt);
-  if (grip < 1) longS *= Math.exp(-1.4 * (1 - grip) * dt);
-  if (longS < -1.2) longS = damp(longS, 0, 7, dt);
 
-  const nfx = Math.sin(car.yaw);
-  const nfz = Math.cos(car.yaw);
-  const nrx = Math.cos(car.yaw);
-  const nrz = -Math.sin(car.yaw);
-  car.vx = nfx * longS + nrx * latS;
-  car.vz = nfz * longS + nrz * latS;
+  let sl = wrapAng(car.yaw - trav);
+  const nn = Math.min(Math.abs(sl), Math.PI * 0.5) / (Math.PI * 0.5);
+  const latTarget = Math.sign(sl || 1) * SLIDE.grip * (nn === 0 ? 0 : Math.pow(nn, SLIDE.driftHold));
+  const blend = 1 - Math.exp(-dt / SLIDE.slideMomentum);
+  car.slide = (car.slide || 0) + (latTarget - (car.slide || 0)) * blend;
+  let turn = car.slide / Math.max(spd0, 3) * dt;
+  if (Math.sign(turn) === Math.sign(sl) && Math.abs(turn) > Math.abs(sl)) turn = sl;
+  trav += turn;
+  sl -= turn;
+
+  let spd = spd0;
+  const boosted = car.boost > 0;
+  const top = SLIDE.top * (boosted ? 1.22 : 1);
+  let drive = 0;
+  if (spd < top * 0.5) drive = SLIDE.earlyAcc * (boosted ? 1.3 : 1);
+  else if (spd < top) drive = SLIDE.midAcc * (top - spd) / (top * 0.5);
+  const brake = car._brake || 0;
+  let acc = drive * (1 - brake) * Math.cos(sl);
+  if (spd > top) acc -= (spd - top) * 0.6;
+  const side = Math.abs(Math.sin(sl));
+  const loss = Math.abs(sl) > Math.PI * 0.5 ? 1 : side ** 5;
+  acc -= SLIDE.driftLoss * (spd + 15) * loss;
+  acc -= brake * SLIDE.brake;
+  acc -= (car._grade || 0) * 9.81;
+  spd = Math.max(0, spd + acc * dt);
+
+  car.vx = Math.sin(trav) * spd;
+  car.vz = Math.cos(trav) * spd;
   car.x += car.vx * dt;
   car.z += car.vz * dt;
-  if (!Number.isFinite(car.x) || !Number.isFinite(car.yawRate)) {
+  if (!Number.isFinite(car.x) || !Number.isFinite(car.yaw)) {
     car.vx = 0;
     car.vz = 0;
     car.yawRate = 0;
   }
-  car.fSpeed = longS;
-  car.lat = latS;
   car.sp = Math.hypot(car.vx, car.vz);
-  car.visualSteer = steer;
+  car.travel = car.sp > 0.3 ? Math.atan2(car.vx, car.vz) : car.yaw;
+  car.slip = car.sp > 0.3 ? wrapAng(car.yaw - car.travel) : 0;
+  car.fSpeed = spd * Math.cos(car.slip);
+  car.lat = spd * Math.sin(car.slip);
+  car.nose = wrapAng((car.target ?? car.yaw) - car.yaw);
+  car.visualSteer = clamp(car.nose, -1, 1);
   car.braking = brake > 0.2;
-  car.sliding = grip < 0.9 && Math.abs(longS) > 8;
+  car.sliding = Math.abs(car.slip) > 0.12 && car.sp > 6;
 }
 
 function trackGap(a, b) {
@@ -1668,57 +1682,49 @@ function trackGap(a, b) {
   return gap;
 }
 
+function aimPlayer() {
+  const trav = player.sp > 0.3 ? Math.atan2(player.vx, player.vz) : player.yaw;
+  const left = keys.has('ArrowLeft') || keys.has('KeyA');
+  const right = keys.has('ArrowRight') || keys.has('KeyD');
+  if (!stickActive) {
+    if (left && !right) player.target = trav - 1.15;
+    else if (right && !left) player.target = trav + 1.15;
+    else if (tiltOn) player.target = trav + tiltSteer * 1.15;
+  }
+  player._brake = (brakeHeld || keys.has('Space')) ? 1 : 0;
+  player._grade = gradeAt(player);
+}
+
 function driveAI(car, dt) {
   const here = frameAt(car.t);
-  const dist = clamp(9 + car.sp * 0.62, 11, 38);
+  const dist = clamp(7 + car.sp * 0.16, 8, 16);
   const look = frameAt(car.t + dist / trackLength);
-  const tight = Math.min(here.brakeRadius, look.brakeRadius);
-  const vCap = Math.sqrt(Math.max(12, VEHICLE.mu * 0.9 * car.skill * tight));
-  const vTarget = Math.min(car.top, vCap);
-  let throttle = car.finished ? 0.4 : 1;
-  let brake = 0;
-  if (!car.finished && car.sp > vTarget + 0.6) {
-    brake = clamp((car.sp - vTarget) / 9, 0, 1);
-    throttle = 0;
-  } else if (car.sp > vTarget - 0.4) {
-    throttle *= 0.45;
-  }
-
-  const inside = -Math.sign(look.curv || 0) * clamp(Math.abs(look.curv) * 16, 0, 3.2);
-  let lane = car.finished ? Math.sign(car.baseLane || 1) * 4.6 : inside;
+  const path = Math.atan2(look.tx, look.tz);
+  const inside = -Math.sign(look.curv || 0) * clamp(Math.abs(look.curv) * 18, 0, 3.5);
+  let lane = car.finished ? Math.sign(car.baseLane || 1) * 4.2 : inside;
   if (!car.finished && player) {
     const gap = trackGap(player, car);
-    if (Math.abs(gap) < 0.018) {
+    if (Math.abs(gap) < 0.02) {
       const side = (player.x - car.x) * here.rx + (player.z - car.z) * here.rz;
-      lane += clamp(side, -1, 1) * 2.4 * car.aggression;
+      lane += clamp(side, -1, 1) * 2.1 * car.aggression;
     }
   }
-  lane = clamp(lane, -5.1, 5.1);
-  car.aimLane = damp(car.aimLane || 0, lane, 4.2, dt);
-  const tx = look.x + look.rx * car.aimLane;
-  const tz = look.z + look.rz * car.aimLane;
-  const dx = tx - car.x;
-  const dz = tz - car.z;
-  const fwdX = Math.sin(car.yaw);
-  const fwdZ = Math.cos(car.yaw);
-  const rightX = Math.cos(car.yaw);
-  const rightZ = -Math.sin(car.yaw);
-  const ahead = dx * fwdX + dz * fwdZ;
-  const side = dx * rightX + dz * rightZ;
-  let steer;
-  if (ahead < 1.5) {
-    let diff = Math.atan2(here.tx, here.tz) - car.yaw;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    steer = clamp(diff * 1.8, -1, 1);
-  } else {
-    steer = clamp(-side / Math.max(6, ahead) * 2.1, -1, 1);
+  lane = clamp(lane, -4.6, 4.6);
+  car.aimLane = damp(car.aimLane || 0, lane, 3.2, dt);
+  const signed = (car.x - here.x) * here.rx + (car.z - here.z) * here.rz - car.aimLane;
+  let offset = clamp(-signed * 0.28, -0.9, 0.9);
+  const tight = Math.min(here.brakeRadius || 90, look.brakeRadius || 90);
+  const vNeed = Math.sqrt(Math.max(64, 8.5 * car.skill * tight));
+  const bend = frameAt(car.t + 36 / trackLength);
+  const turn = Math.sign(bend.curv || look.curv || 0);
+  if (!car.finished && turn !== 0 && car.sp > vNeed + 1.5) {
+    const want = -turn * clamp((car.sp - vNeed) / 7, 0, 1.15);
+    if (Math.sign(want) === Math.sign(offset) || Math.abs(offset) < 0.35) offset += want;
+    offset = clamp(offset, -1.4, 1.4);
   }
-  const signed = (car.x - here.x) * here.rx + (car.z - here.z) * here.rz;
-  if (signed > 4.2) steer += 0.75;
-  if (signed < -4.2) steer -= 0.75;
-  car.cmdSteer = damp(car.cmdSteer || 0, clamp(steer, -1, 1), 9, dt);
-  return { steer: car.cmdSteer, throttle, brake, grade: gradeAt(car) };
+  car.target = dampAngle(car.target ?? path, path + offset, 7, dt);
+  car._brake = car.finished ? 0.3 : 0;
+  car._grade = gradeAt(car);
 }
 
 function collideAll() {
@@ -1867,17 +1873,17 @@ function syncCars(dt) {
   for (const car of cars) {
     car.root.position.set(car.x, car.surfaceY, car.z);
     car.root.rotation.y = car.yaw;
-    const steerVis = car.ai ? car.visualSteer : steerSmooth;
     if (dt > 0) {
       const ahead = frameAt(car.t + 0.012);
       const here = frameAt(car.t);
       const grade = (ahead.y - here.y) / Math.max(1, trackLength * 0.012);
       car.body.rotation.x = damp(car.body.rotation.x, clamp(-grade * 0.85, -0.2, 0.16), 6, dt);
-      car.body.rotation.z = damp(car.body.rotation.z, steerVis * 0.22, 8, dt);
+      car.body.rotation.z = damp(car.body.rotation.z, (car.slip || 0) * 0.55, 8, dt);
       car.spin += (car.sp || 0) * dt * 2.4;
     }
     for (const w of car.wheels) {
-      w.pivot.rotation.y = w.front ? -steerVis * 0.5 : 0;
+      const nose = car.nose || 0;
+      w.pivot.rotation.y = w.front ? clamp(-(car.slip || 0) + nose * 0.5, -0.62, 0.62) : 0;
       w.spin.rotation.x = car.spin;
     }
     car.tailMat.emissiveIntensity = car.braking ? 2.2 : 0.32;
@@ -2009,26 +2015,10 @@ function clearInput() {
 }
 
 function resetStick() {
-  stickX = 0;
-  stickY = 0;
+  stickActive = false;
   stickId = null;
-  if (stickKnob) stickKnob.style.transform = 'translate(0px, 0px)';
-}
-
-function readSteer() {
-  if (state !== 'race') return 0;
-  let s = stickX;
-  if (keys.has('ArrowLeft') || keys.has('KeyA')) s -= 1;
-  if (keys.has('ArrowRight') || keys.has('KeyD')) s += 1;
-  if (Math.abs(s) < 0.04 && tiltOn) s = tiltSteer;
-  return clamp(s, -1, 1);
-}
-function readBrakeAmount() {
-  if (state !== 'race') return 0;
-  let amount = 0;
-  if (brakeHeld || keys.has('Space')) amount = 1;
-  amount = Math.max(amount, clamp(-stickY - 0.18, 0, 1) / 0.82);
-  return clamp(amount, 0, 1);
+  if (stick) stick.style.transform = '';
+  if (stickKnob) stickKnob.style.transform = '';
 }
 
 function startGame() {
@@ -2044,37 +2034,80 @@ function startGame() {
   beginCountdown();
 }
 
+function cameraGround() {
+  camera.getWorldDirection(_look);
+  _look.y = 0;
+  if (_look.lengthSq() < 1e-8) _look.set(0, 0, 1);
+  _look.normalize();
+  _right.crossVectors(_upY, _look).normalize();
+}
+
+function headingToScreen(yaw) {
+  cameraGround();
+  const fx = Math.sin(yaw);
+  const fz = Math.cos(yaw);
+  return {
+    x: fx * _right.x + fz * _right.z,
+    y: -(fx * _look.x + fz * _look.z),
+  };
+}
+
+function screenToHeading(dx, dy) {
+  cameraGround();
+  const gx = _right.x * dx - _look.x * dy;
+  const gz = _right.z * dx - _look.z * dy;
+  return Math.atan2(gx, gz);
+}
+
+function showStick(fx, fy) {
+  stick.style.transform = 'translate(' + (stickOx - stickHomeX) + 'px, ' + (stickOy - stickHomeY) + 'px)';
+  stickKnob.style.transform = 'translate(' + (fx - stickOx) + 'px, ' + (fy - stickOy) + 'px)';
+}
+
 function bindUI() {
-  const moveStick = (e) => {
-    const rect = stick.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    let dx = e.clientX - cx;
-    let dy = e.clientY - cy;
-    const max = rect.width * 0.36;
-    const mag = Math.hypot(dx, dy) || 1;
-    if (mag > max) {
-      dx *= max / mag;
-      dy *= max / mag;
+  const dragStick = (e) => {
+    let dx = e.clientX - stickOx;
+    let dy = e.clientY - stickOy;
+    let mag = Math.hypot(dx, dy);
+    if (mag > STICK_OUTER) {
+      const spill = (mag - STICK_OUTER) / mag;
+      stickOx += dx * spill;
+      stickOy += dy * spill;
+      dx = e.clientX - stickOx;
+      dy = e.clientY - stickOy;
+      mag = Math.hypot(dx, dy);
     }
-    stickKnob.style.transform = 'translate(' + dx + 'px, ' + dy + 'px)';
-    stickX = dx / max;
-    stickY = -dy / max;
+    showStick(e.clientX, e.clientY);
+    if (mag < STICK_DEAD || !player) return;
+    player.target = screenToHeading(dx, dy);
   };
   stick.addEventListener('pointerdown', (e) => {
     if (state !== 'race' && state !== 'countdown') return;
     e.preventDefault();
+    stick.style.transform = '';
+    const rect = stick.getBoundingClientRect();
+    stickHomeX = rect.left + rect.width / 2;
+    stickHomeY = rect.top + rect.height / 2;
+    const aim = player ? (player.target ?? player.yaw) : 0;
+    const dir = headingToScreen(aim);
+    const len = Math.hypot(dir.x, dir.y) || 1;
+    stickOx = e.clientX - (dir.x / len) * STICK_R;
+    stickOy = e.clientY - (dir.y / len) * STICK_R;
     stick.setPointerCapture(e.pointerId);
     stickId = e.pointerId;
-    moveStick(e);
+    stickActive = true;
+    showStick(e.clientX, e.clientY);
   }, { passive: false });
   stick.addEventListener('pointermove', (e) => {
     if (e.pointerId !== stickId) return;
-    moveStick(e);
+    dragStick(e);
   });
   const endStick = (e) => {
     if (e.pointerId !== stickId) return;
-    resetStick();
+    stickActive = false;
+    stickId = null;
+    stick.style.transform = '';
+    stickKnob.style.transform = '';
   };
   stick.addEventListener('pointerup', endStick);
   stick.addEventListener('pointercancel', endStick);
