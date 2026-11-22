@@ -30721,9 +30721,9 @@ void main() {
   }
   function readSteer() {
     if (state !== "race") return 0;
-    let s = -stickX;
-    if (keys.has("ArrowLeft") || keys.has("KeyA")) s += 1;
-    if (keys.has("ArrowRight") || keys.has("KeyD")) s -= 1;
+    let s = stickX;
+    if (keys.has("ArrowLeft") || keys.has("KeyA")) s -= 1;
+    if (keys.has("ArrowRight") || keys.has("KeyD")) s += 1;
     if (Math.abs(s) < 0.04 && tiltOn) s = tiltSteer;
     return clamp2(s, -1, 1);
   }
