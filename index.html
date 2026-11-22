@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1c100e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Sunline — a tilted top-down 3D race at dusk." />
+  <title>Sunline</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect fill='%23ff4d2e' width='16' height='16'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/game.css" />
+</head>
+<body>
+  <div id="app" class="is-title">
+    <canvas id="view"></canvas>
+
+    <div id="steer-left" class="steer" aria-hidden="true"></div>
+    <div id="steer-right" class="steer" aria-hidden="true"></div>
+
+    <div id="hud">
+      <div class="top">
+        <div id="pos" data-place="4">4TH</div>
+        <div class="mid">
+          <div id="lap">LAP 1/3</div>
+          <div id="best">BEST —</div>
+        </div>
+        <div id="time">0:00.000</div>
+      </div>
+      <button id="pause" type="button" aria-label="Pause">II</button>
+      <div id="banner"></div>
+      <div id="wrong">WRONG WAY</div>
+      <div id="hint">HOLD THE EDGES TO STEER</div>
+      <div class="bottom">
+        <canvas id="map" width="180" height="180" aria-hidden="true"></canvas>
+        <button id="brake" type="button">BRAKE</button>
+        <div id="speed">
+          <b id="boost-flag">BOOST</b>
+          <span id="speed-num">0</span>
+          <small>KM/H</small>
+        </div>
+      </div>
+    </div>
+
+    <div id="count" aria-live="assertive"></div>
+
+    <div id="overlay">
+      <section class="panel" id="panel-title">
+        <p class="eyebrow">Dusk grand prix</p>
+        <h1>SUNLINE</h1>
+        <p class="lede">Three laps on a tilted circuit. You start last. See the corner, then commit.</p>
+        <p class="how">Hold the left or right edge to steer. The pedal brakes and rotates harder. Teal pads boost.</p>
+        <p class="how fine">Arrows or A/D steer. Space brakes. P pauses. R restarts.</p>
+        <button id="start" class="primary" type="button" disabled>LOADING</button>
+        <div class="toggles">
+          <button id="sound-toggle" class="ghost is-on" type="button" aria-pressed="true">SOUND ON</button>
+          <button id="tilt-toggle" class="ghost" type="button" aria-pressed="false">TILT OFF</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-pause">
+        <p class="eyebrow">Paused</p>
+        <h2>HOLDING</h2>
+        <p id="pause-stat" class="lede"></p>
+        <button id="resume" class="primary" type="button">RESUME</button>
+        <button id="retry" class="ghost" type="button">RESTART</button>
+      </section>
+
+      <section class="panel" id="panel-finish">
+        <p class="eyebrow">Checkered flag</p>
+        <h2 id="finish-title">YOU WIN</h2>
+        <p id="finish-time" class="finish-time">0:00.000</p>
+        <ol id="results"></ol>
+        <button id="again" class="primary" type="button">RACE AGAIN</button>
+      </section>
+    </div>
+  </div>
+
+  <script src="js/sunline.js"></script>
+  <script>
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        if (!window.__sunline) {
+          var lede = document.querySelector('#panel-title .lede');
+          if (lede) lede.textContent = 'The race failed to start. Reload the page.';
+        }
+      }, 1200);
+    });
+  </script>
+</body>
+</html>
