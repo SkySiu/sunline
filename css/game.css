@@ -63,30 +63,35 @@ button:disabled {
   opacity: 1;
 }
 
-.steer {
+#stick {
   display: none;
   position: absolute;
-  top: 0;
-  bottom: 128px;
-  width: 42%;
-  z-index: 2;
+  z-index: 4;
+  left: calc(env(safe-area-inset-left) + 16px);
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  border: 2px solid rgba(244, 239, 230, 0.88);
+  background: rgba(28, 16, 12, 0.42);
   touch-action: none;
 }
 
-#steer-left { left: 0; }
-#steer-right { right: 0; }
-
-#steer-left.is-hot {
-  background: linear-gradient(90deg, rgba(255, 77, 46, 0.34), rgba(255, 77, 46, 0));
-}
-
-#steer-right.is-hot {
-  background: linear-gradient(270deg, rgba(255, 77, 46, 0.34), rgba(255, 77, 46, 0));
-}
-
-#app.is-countdown .steer,
-#app.is-race .steer {
+#app.is-countdown #stick,
+#app.is-race #stick {
   display: block;
+}
+
+#stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 62px;
+  height: 62px;
+  margin: -31px 0 0 -31px;
+  border-radius: 50%;
+  background: var(--persimmon);
+  box-shadow: 0 5px 0 #1c100e;
 }
 
 #hud {
@@ -238,7 +243,7 @@ h2 {
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: calc(env(safe-area-inset-bottom) + 128px);
+  bottom: calc(env(safe-area-inset-bottom) + 168px);
   text-align: center;
   font-size: 12px;
   font-weight: 800;
@@ -252,18 +257,21 @@ h2 {
 
 .bottom {
   position: absolute;
-  left: calc(env(safe-area-inset-left) + 14px);
+  left: calc(env(safe-area-inset-left) + 168px);
   right: calc(env(safe-area-inset-right) + 14px);
-  bottom: calc(env(safe-area-inset-bottom) + 8px);
+  bottom: calc(env(safe-area-inset-bottom) + 18px);
   display: flex;
   align-items: flex-end;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 18px;
 }
 
 #map {
-  width: 108px;
-  height: 108px;
+  position: absolute;
+  left: calc(env(safe-area-inset-left) + 14px);
+  top: calc(env(safe-area-inset-top) + 64px);
+  width: 86px;
+  height: 86px;
   border-radius: 50%;
   background: rgba(28, 16, 12, 0.72);
   border: 2px solid rgba(244, 239, 230, 0.82);
@@ -500,9 +508,11 @@ h2 {
   .panel { width: min(400px, 46vw); }
   h1 { font-size: 72px; }
   #brake { width: 78px; height: 78px; }
-  #map { width: 74px; height: 74px; }
-  .steer { bottom: 96px; }
-  #hint { bottom: calc(env(safe-area-inset-bottom) + 96px); }
+  #map { width: 68px; height: 68px; }
+  #stick { width: 112px; height: 112px; }
+  #stick-knob { width: 50px; height: 50px; margin: -25px 0 0 -25px; }
+  .bottom { left: calc(env(safe-area-inset-left) + 140px); }
+  #hint { bottom: calc(env(safe-area-inset-bottom) + 132px); }
 }
 
 @media (max-height: 430px) {

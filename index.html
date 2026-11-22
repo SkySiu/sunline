@@ -15,8 +15,9 @@
   <div id="app" class="is-title">
     <canvas id="view"></canvas>
 
-    <div id="steer-left" class="steer" aria-hidden="true"></div>
-    <div id="steer-right" class="steer" aria-hidden="true"></div>
+    <div id="stick" aria-label="Steering joystick">
+      <div id="stick-knob"></div>
+    </div>
 
     <div id="hud">
       <div class="top">
@@ -30,9 +31,9 @@
       <button id="pause" type="button" aria-label="Pause">II</button>
       <div id="banner"></div>
       <div id="wrong">WRONG WAY</div>
-      <div id="hint">HOLD THE EDGES TO STEER</div>
+      <div id="hint">DRAG THE STICK TO STEER</div>
+      <canvas id="map" width="180" height="180" aria-hidden="true"></canvas>
       <div class="bottom">
-        <canvas id="map" width="180" height="180" aria-hidden="true"></canvas>
         <button id="brake" type="button">BRAKE</button>
         <div id="speed">
           <b id="boost-flag">BOOST</b>
@@ -49,7 +50,7 @@
         <p class="eyebrow">Dusk grand prix</p>
         <h1>SUNLINE</h1>
         <p class="lede">Three laps on a tilted circuit. You start last. See the corner, then commit.</p>
-        <p class="how">Hold the left or right edge to steer. The pedal brakes and rotates harder. Teal pads boost.</p>
+        <p class="how">Drag the stick to steer. Pull it back, or use the pedal, to brake. Teal pads boost.</p>
         <p class="how fine">Arrows or A/D steer. Space brakes. P pauses. R restarts.</p>
         <button id="start" class="primary" type="button" disabled>LOADING</button>
         <div class="toggles">
